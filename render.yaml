@@ -3,7 +3,7 @@ services:
     name: shamba-link-api
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build --workspace @shamba-link/api
+    buildCommand: npm ci --include=dev && npm run build --workspace @shamba-link/api
     startCommand: npm run db:migrate --workspace @shamba-link/api && npm run start --workspace @shamba-link/api
     healthCheckPath: /api/health
     envVars:
@@ -29,7 +29,7 @@ services:
   - type: web
     name: shamba-link-web
     runtime: static
-    buildCommand: npm ci && npm run build --workspace @shamba-link/web
+    buildCommand: npm ci --include=dev && npm run build --workspace @shamba-link/web
     staticPublishPath: apps/web/dist
     envVars:
       - key: VITE_API_URL
