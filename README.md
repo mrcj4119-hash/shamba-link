@@ -1,0 +1,165 @@
+# Shamba Link
+
+A responsive agricultural support and local marketplace application built with React, TypeScript, Vite, Tailwind CSS, Express, PostgreSQL, and Knex.
+
+## Requirements
+
+- Node.js 20 or newer
+- Docker Desktop (or a PostgreSQL 15+ server)
+
+## Run locally on Windows
+
+From the project folder in PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up -d postgres
+npm install
+npm run db:migrate
+npm run db:bootstrap-admin --workspace @shamba-link/api
+npm run db:seed
+npm run dev
+```
+
+Open `http://localhost:5173`. The API is at `http://localhost:3000`; `GET /api/health` verifies database connectivity. Vite forwards `/api` and local `/uploads` requests to the API while developing.
+
+To create the first administrator, set `ADMIN_NAME`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` in `.env` before running the bootstrap command. Choose a unique email and a password of at least 12 characters. The command creates one admin account, never changes an existing account, and there is no public admin registration. Sign in at `/login` with that email and password; the admin workspace shows platform account totals and the payment-review queue. Clear the three bootstrap values from `.env` after account creation. Admins can review payments without adding their email to `PAYMENT_REVIEWER_EMAILS`. In production, provision at least one admin account or configure an existing account in `PAYMENT_REVIEWER_EMAILS` before starting the API.
+
+The development seed creates these accounts (password: `ShambaDemo2026!`):
+
+| Role | Email |
+|---|---|
+| Farmer | `demo.farmer@shambalink.test` |
+| Agrovet | `demo.agrovet@shambalink.test` |
+| Expert | `demo.expert@shambalink.test` |
+
+Seed accounts and products are development fixtures only. The seed deliberately refuses to run when `NODE_ENV=production`.
+
+### KSh 10 photo check-in payment
+
+Signing in and using the farmer workspace are free. The separate crop/livestock photo check-in flow requires a KSh 10 manual M-Pesa Send Money payment before contacting the AI provider. The farmer sends money to `PHOTO_FEEDBACK_RECIPIENT_PHONE` (default `0704189723`), submits the receipt code from the M-Pesa confirmation SMS, and waits for an administrator to verify the transfer. Approval unlocks feedback for the rest of that sign-in session. Crop-case advice from the **Report a Crop Problem** form is free and does not use this payment gate: opt in when submitting to get immediate AI guidance and nearby in-region agrovet suggestions. This is not a Daraja STK Push and does not automatically charge or verify a payment. Daraja sandbox transactions do not send real funds and cannot pay this personal phone number.
+
+Set `PAYMENT_REVIEWER_EMAILS` in `.env` to a comma-separated list of existing Shamba Link account emails authorized to verify receipts. These accounts see **Review payments** in the app navigation. Reviewers must check the receipt against the actual M-Pesa transaction record before approving or rejecting it. Do not enter reviewer passwords or M-Pesa credentials in this setting.
+
+The database migration adds the receipt and payment-session fields. Payment is requested only for the separate photo check-in flow. Each fresh farmer sign-in requires a new manual payment before its first photo check-in; approval from an earlier sign-in does not carry over.
+
+## Features
+
+- Account registration and sign-in with role-aware dashboards and server-enforced authorization
+- Farmer farm registration, private crop-field passports, English/Kiswahili language preference, and account-owned farm input/application records
+- Private crop-problem cases with unique references, optional photos, dated action/observation timelines, farmer-recorded outcomes, follow-up dates, and explicit farmer-controlled closure
+- Product-use and batch traceability notes; complaints remain explicitly pending review and do not assert a product is unsafe, fake, or defective
+- Farmer crop/livestock photo check-ins, private/local or Cloudinary-backed media, expert-review-first demo response, and scan history
+- Local agrovet catalog, region filters, vendor product management, multi-vendor-safe basket, transactional stock decrement and checkout
+- Farmer-to-expert consultation requests, appointment lists, cancellation/completion, and protected vendor order status updates
+- On-demand KSh 10 M-Pesa Send Money payment before photo check-ins, with receipt submission and administrator verification; crop-case AI advice remains free
+- Expiring, single-use password recovery links delivered through configured SMTP
+- Searchable English/Kiswahili farming guides with category filters and administrator editing/publication controls
+- Administrator account role/access management and crop-report search/status updates with timeline events
+- Fun Zone quiz and games with per-browser best-score/play-count history saved in local storage
+- Direct Shamba Link support phone contact: `0704189723`
+- Soil-test records with pH and N/P/K result context, farm reminders, approximate weather forecasts, general weather-based scouting alerts, and harvest/yield history
+- Mobile-first layouts, accessible photo and form flows, loading/error/empty states, and responsive marketplace
+
+### Soil, weather, crop calendar and harvest history
+
+Farmer **Soil & crop planner** records the crop, farm/field, plot size and available soil-test results. It explains pH in broad terms and retains the lab's N/P/K values and units, but does not calculate fertilizer or lime rates. Crop targets vary by variety, soil and location; farmers should have the testing laboratory or county agricultural extension officer interpret the report before changing inputs. The page links to KALRO as a trusted starting point.
+
+The planner also provides an on-demand seven-day regional forecast through [Open-Meteo](https://open-meteo.com/). Farmers explicitly opt in before the selected farm's county or general location is sent to Open-Meteo; GPS coordinates and account details are not sent. Forecast locations are approximate and the weather prompts (rain/drainage, hot/dry moisture checks, or humid-condition scouting) are not disease diagnoses or outbreak alerts. Weather requires API-server network access to Open-Meteo; provider outages and unmatched locations are shown to the farmer.
+
+Farmers can add and complete field reminders, or create a generic scouting/weeding starter set from a crop passport's planting date. These are editable prompts, not crop-variety-specific treatment schedules; this release shows reminders in the app but does not send push notifications. The harvest tracker stores crop, harvest date, quantity, unit, optional plot area and season so farmers can compare their own records. Per-acre comparisons should only be made between comparable plots and matching units.
+
+Run `npm run db:migrate` after deployment to create the soil-test, calendar-task and harvest-history tables. These records are account-owned and retained in PostgreSQL.
+
+### Password recovery, guides, administration and Fun Zone
+
+The public **Knowledge library** searches published bilingual crop, pest, disease, soil, livestock, and prevention guides. Run `npm run db:migrate` after deploying to create the guide and password-reset tables and seed the initial guides. Administrators can search accounts, change non-admin roles or access status, update crop-report statuses, and create, edit, publish, or unpublish guides from the admin navigation. Account and crop-report data is backed by PostgreSQL; Fun Zone scores are stored only in that browser's local storage and are not synchronized between devices or accounts.
+
+Password recovery requires an SMTP service. Set these values in the API environment (the root `.env` is used for local development):
+
+```dotenv
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM=
+```
+
+Set `SMTP_HOST` and a valid `SMTP_FROM`; configure both `SMTP_USER` and `SMTP_PASSWORD` when the provider requires authentication. Use `SMTP_SECURE=true` when the provider requires implicit TLS. Without SMTP, password-reset requests return an explicit service-unavailable error; recovery email is not silently simulated. Reset links expire after 30 minutes and can be used once. Configure `WEB_ORIGIN` to the deployed web app so links point to the correct site. Do not commit provider credentials.
+
+For Gmail or Google Workspace, use `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, and `SMTP_SECURE=false`. Set `SMTP_USER` and `SMTP_FROM` to the sending mailbox and `SMTP_PASSWORD` to a Google App Password (requires 2-Step Verification); do not use the account's normal password. Enter the App Password directly in the ignored local `.env` file or deployment secret manager, never in source control or chat.
+
+Shamba Link support is by phone at `0704189723`; no support email is displayed.
+
+### Diagnostic AI integration
+
+Without an AI service configured, photo diagnoses intentionally return **Demo mode — expert assessment recommended**, zero confidence, and no disease claim. Crop-case advice defaults to a local Ollama model, so it does not require a billed API key. Install [Ollama for Windows](https://ollama.com/download/windows), then download the vision model from PowerShell:
+
+```powershell
+ollama pull qwen2.5vl:3b
+```
+
+Keep Ollama running locally. The API connects to `http://localhost:11434`, uses the `qwen2.5vl:3b` model, and can be configured with `OLLAMA_BASE_URL` and `OLLAMA_MODEL`. Crop-case advice requests are kept concise to reduce generation time, but a complete AI response is not guaranteed within one second; local inference speed depends on your hardware and cloud-provider speed depends on network and service availability. OpenAI and Gemini remain optional cloud providers by setting `CROP_ADVICE_PROVIDER=openai` or `CROP_ADVICE_PROVIDER=gemini` and supplying the matching API key and model settings. Farmers must explicitly opt in before crop descriptions, optional photos, and crop context are sent to the selected AI provider; with Ollama these remain on the local computer, while cloud providers receive the crop data. The app does not send farmer identity, contact details, farm coordinates, or account information. The AI response is unverified decision support: it must not claim a confirmed diagnosis or prescribe medicines, pesticides, active ingredients, doses, mixing, or application instructions. The crop-case result uses green for routine, yellow for prompt, and red for urgent AI-rated attention; these are triage signals, not proof that a crop is harmless or diseased. Agrovets are suggested from the farmer's saved region and current in-stock listings; recommendations are not verification of vendor credentials or product efficacy. Set `AI_API_URL` (and optionally `AI_API_KEY`) to retain the existing separate photo-diagnosis integration. That configured endpoint receives:
+
+```json
+{
+  "imageBase64": "<base64 image bytes>",
+  "contentType": "image/jpeg",
+  "subject": "crop"
+}
+```
+
+It must return the validated contract:
+
+```json
+{
+  "detectedDisease": "string",
+  "confidenceScore": 0.0,
+  "severityLevel": "low | moderate | high | critical | unknown",
+  "treatmentRecommendations": "string",
+  "preventiveMeasures": "string",
+  "requiresExpertReview": true
+}
+```
+
+The API times out after 25 seconds and rejects malformed responses. Use a provider that has been validated for the target crops/livestock and locale; the result is decision support and must not be presented as a confirmed diagnosis.
+
+The crop recovery case reporter is deliberately separate from this diagnostic endpoint. With explicit opt-in, it sends the reported symptoms and optional photo to the configured AI provider during submission and saves the immediate, unverified decision-support response with the case. This crop-case advice is free; a saved case without advice can request a free text-only assessment later from its detail page. Nearby agrovet listings are matched to the farmer's saved region and AI-suggested broad product types when available; the app does not collect exact coordinates or claim precise distance. Cases remain open until a farmer records an outcome and explicitly closes them; elapsed time never marks a crop recovered.
+
+### Service boundaries
+
+- Exact farm coordinates are not collected. Farm records contain a county and optional general location description only.
+- Verified community outbreak alerts, offline report synchronization, expert credential verification, and product-complaint investigation are not connected services in this release. The app does not fabricate outbreaks, expert responses, or review outcomes.
+- A recorded expert request is not confirmation that an expert has been assigned or notified. Demo expert seed accounts are fixtures, not credential verification.
+- The language preference is saved to the farmer profile; the entire application has not yet been translated into Kiswahili.
+
+### Media storage
+
+Local development writes verified JPEG/PNG/WebP files to `apps/api/uploads` when started from the API package. Set `UPLOAD_DIR` to change the local path. In production all three `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` variables are required; the API uploads as authenticated assets and stores signed URLs. Configure Cloudinary retention/privacy to match the application’s data policy.
+
+### Background image sources
+
+The signed-in workspace uses locally bundled, muted agricultural background images selected from these Pinterest pins: [farm barn](https://www.pinterest.com/pin/817333032422258527/), [chickens](https://www.pinterest.com/pin/401524123043853569/), [farm illustration](https://www.pinterest.com/pin/557250153915502044/), and [irrigation](https://www.pinterest.com/pin/984599537306315144/). The light overlay keeps text and forms legible.
+
+## Useful commands
+
+```powershell
+npm run typecheck
+npm test
+npm run build
+npm run db:migrate
+npm run db:seed
+```
+
+Production builds are written to `apps/api/dist` and `apps/web/dist`. Serve the web assets over HTTPS and route `/api` to the API. Set an unpredictable `JWT_SECRET`, production `DATABASE_URL`, exact `WEB_ORIGIN`, Cloudinary credentials, and a provider URL only after the AI endpoint is configured and tested. Do not use the example database credentials or demo seed data in production.
+
+## Data and operational notes
+
+- PostgreSQL migrations create the users, farms, crop passports, recovery cases/events, farm-input records, diagnoses, products, consultations, orders, and order-items tables with checks, foreign keys, and indexes.
+- Checkout derives price and vendor ownership from PostgreSQL, locks product rows, snapshots prices, checks and decrements stock inside a transaction, and rejects cross-vendor orders.
+- Expert bookings are protected against duplicate pending bookings for the same expert/time by a PostgreSQL partial unique index.
+- Access tokens are held in tab-scoped `sessionStorage`; keep their configured lifetime short. A production refresh-session feature should use rotating, hashed, HTTP-only secure cookies with CSRF protection.
+- Local crop and diagnosis photos are served only through short-lived, owner-bound media links; keep API signing secrets private and configure private Cloudinary retention before production.
+- Set a production reverse proxy/CDN policy for media. Local media storage is not suitable for horizontally scaled production API instances.
+- Before public launch, add payment provider/webhook support, shipping/delivery address policy, expert availability slots/credentials, account deactivation and retention, audit logging, backup/restore tests, and accessibility/security reviews.
