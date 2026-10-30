@@ -71,10 +71,40 @@ const adviceJsonSchema = {
 
 function parseAdviceText(text: string): CropAdvice {
   let json: unknown;
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
   try {
-    json = JSON.parse(text);
+    json = JSON.parse(fenced?.[1] ?? trimmed);
   } catch {
-    throw new Error("AI provider returned advice in an invalid format.");
+    const start = trimmed.indexOf("{");
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let extracted: unknown;
+    for (let index = start; start >= 0 && index < trimmed.length; index += 1) {
+      const character = trimmed[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            extracted = JSON.parse(trimmed.slice(start, index + 1));
+          } catch {
+            break;
+          }
+          break;
+        }
+      }
+    }
+    if (extracted === undefined) throw new Error("AI provider returned advice in an invalid format.");
+    json = extracted;
   }
   return adviceSchema.parse(json);
 }

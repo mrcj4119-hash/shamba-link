@@ -19,6 +19,12 @@ describe("parseGeminiAdvice", () => {
     })).toEqual(advice);
   });
 
+  it("extracts structured advice when Gemini wraps JSON in text or a code fence", () => {
+    expect(parseGeminiAdvice({
+      candidates: [{ content: { parts: [{ text: `Here is the assessment:\n\`\`\`json\n${JSON.stringify(advice)}\n\`\`\`` }] } }],
+    })).toEqual(advice);
+  });
+
   it("rejects malformed advice rather than returning unsafe partial guidance", () => {
     expect(() => parseGeminiAdvice({
       candidates: [{ content: { parts: [{ text: JSON.stringify({ ...advice, confidenceScore: 2 }) }] } }],
