@@ -4,11 +4,12 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, CalendarDays, Camera, CheckCircle2, ClipboardList, CloudSun,
-  FileImage, FlaskConical, Flower2, Languages, Leaf, MapPin, Phone, Plus, ShieldCheck,
+  FileImage, FlaskConical, Flower2, Languages, Leaf, MapPin, Mic, Phone, Plus, ShieldCheck,
   Sprout, Stethoscope, Wheat,
 } from "lucide-react";
 import { ApiError, api, imageUrl } from "./api";
 import { useAuth } from "./auth";
+import { LiveCameraCapture } from "./LiveCameraCapture";
 import type { CaseStatus, CropCase, Farm, FarmInputRecord, RecommendedAgrovet } from "./types";
 import "./farmer-workspace.css";
 
@@ -282,16 +283,25 @@ export function FarmerCasesPage() {
   const [caseType, setCaseType] = useState<"crop" | "livestock">("crop");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState("");
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState("");
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [audioPreview, setAudioPreview] = useState("");
+  const [audioRecording, setAudioRecording] = useState(false);
+  const [audioRecordingSeconds, setAudioRecordingSeconds] = useState(0);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const photoCameraInput = useRef<HTMLInputElement>(null);
   const photoBrowseInput = useRef<HTMLInputElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
+  const audioRecorder = useRef<MediaRecorder | null>(null);
   const cameraStream = useRef<MediaStream | null>(null);
+  const audioStream = useRef<MediaStream | null>(null);
   const recordingTimeout = useRef<number | null>(null);
   const recordingInterval = useRef<number | null>(null);
+  const audioRecordingTimeout = useRef<number | null>(null);
+  const audioRecordingInterval = useRef<number | null>(null);
   const selectedCase = cases.data?.data.find((item) => item.id === selectedId) ?? cases.data?.data[0];
   const agrovets = useQuery({
     queryKey: [
@@ -314,6 +324,8 @@ export function FarmerCasesPage() {
       setPhotoPreview("");
       setVideoFile(null);
       setVideoPreview("");
+      setAudioFile(null);
+      setAudioPreview("");
       await client.invalidateQueries({ queryKey: ["crop-cases"] });
       await client.invalidateQueries({ queryKey: ["case-agrovets", result.data.id] });
     },
@@ -365,14 +377,26 @@ export function FarmerCasesPage() {
     return () => URL.revokeObjectURL(videoPreview);
   }, [videoPreview]);
 
+  useEffect(() => {
+    if (!audioPreview) return undefined;
+    return () => URL.revokeObjectURL(audioPreview);
+  }, [audioPreview]);
+
   useEffect(() => () => {
     if (recordingTimeout.current !== null) window.clearTimeout(recordingTimeout.current);
     if (recordingInterval.current !== null) window.clearInterval(recordingInterval.current);
+    if (audioRecordingTimeout.current !== null) window.clearTimeout(audioRecordingTimeout.current);
+    if (audioRecordingInterval.current !== null) window.clearInterval(audioRecordingInterval.current);
     if (recorder.current?.state === "recording") {
       recorder.current.onstop = null;
       recorder.current.stop();
     }
+    if (audioRecorder.current?.state === "recording") {
+      audioRecorder.current.onstop = null;
+      audioRecorder.current.stop();
+    }
     cameraStream.current?.getTracks().forEach((track) => track.stop());
+    audioStream.current?.getTracks().forEach((track) => track.stop());
   }, []);
 
   function selectPhoto(event: ChangeEvent<HTMLInputElement>) {
@@ -452,6 +476,70 @@ export function FarmerCasesPage() {
     if (recorder.current?.state === "recording") recorder.current.stop();
   }
 
+  async function startAudioRecording() {
+    setError("");
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("Voice recording is not supported in this browser. You can still describe the problem in writing.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStream.current = stream;
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+        .find((type) => MediaRecorder.isTypeSupported(type));
+      const activeRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      audioRecorder.current = activeRecorder;
+      const chunks: BlobPart[] = [];
+      activeRecorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+      };
+      activeRecorder.onstop = () => {
+        const type = activeRecorder.mimeType.startsWith("audio/mp4") ? "audio/mp4" : "audio/webm";
+        const extension = type === "audio/mp4" ? "mp4" : "webm";
+        const recordingFile = new File(chunks, `farm-description.${extension}`, { type, lastModified: Date.now() });
+        if (!recordingFile.size) {
+          setAudioFile(null);
+          setAudioPreview("");
+          setError("No voice recording was captured. Please try recording again.");
+        } else if (recordingFile.size > 10 * 1024 * 1024) {
+          setAudioFile(null);
+          setAudioPreview("");
+          setError("The voice recording is larger than 10 MB. Record a shorter message and try again.");
+        } else {
+          setAudioFile(recordingFile);
+          setAudioPreview(URL.createObjectURL(recordingFile));
+        }
+        stream.getTracks().forEach((track) => track.stop());
+        audioStream.current = null;
+        if (audioRecordingTimeout.current !== null) window.clearTimeout(audioRecordingTimeout.current);
+        if (audioRecordingInterval.current !== null) window.clearInterval(audioRecordingInterval.current);
+        setAudioRecording(false);
+      };
+      setAudioFile(null);
+      setAudioPreview("");
+      setAudioRecordingSeconds(0);
+      activeRecorder.start();
+      setAudioRecording(true);
+      const startedAt = Date.now();
+      audioRecordingInterval.current = window.setInterval(() => {
+        setAudioRecordingSeconds(Math.min(60, Math.floor((Date.now() - startedAt) / 1000)));
+      }, 250);
+      audioRecordingTimeout.current = window.setTimeout(() => {
+        if (activeRecorder.state === "recording") activeRecorder.stop();
+      }, 60_000);
+    } catch (cause) {
+      audioStream.current?.getTracks().forEach((track) => track.stop());
+      audioStream.current = null;
+      setError(cause instanceof Error && cause.name === "NotAllowedError"
+        ? "Allow microphone access to record a voice description."
+        : "We couldn't start the microphone. Check its connection and try again.");
+    }
+  }
+
+  function stopAudioRecording() {
+    if (audioRecorder.current?.state === "recording") audioRecorder.current.stop();
+  }
+
   function submitReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -463,6 +551,7 @@ export function FarmerCasesPage() {
     }
     if (photoFile) body.append("image", photoFile);
     if (videoFile) body.append("video", videoFile);
+    if (audioFile) body.append("audio", audioFile);
     createCase.mutate(body);
     form.reset();
     setAllowAi(false);
@@ -497,7 +586,7 @@ export function FarmerCasesPage() {
     <SectionTitle eyebrow="FARM HEALTH TRACKER" title="Crop & animal problem reports"
       detail="Get cautious AI guidance for crop or animal concerns, keep a timeline, and ask a qualified professional to confirm the cause and treatment."
       action={<Link className="farmer-inline-link" to="/app/farms">My farm passports</Link>} />
-    <div className="farmer-privacy-banner"><ShieldCheck size={19} /><span><strong>Responsible guidance</strong> If you opt in, the configured AI provider reviews your report and optional photo for cautious next steps. AI suggestions are not confirmed diagnoses and do not prescribe medicines or chemicals. Animal reports receive cautious triage guidance; urgent animal symptoms need prompt veterinary care. Your optional farm video is saved as context and is not sent for AI analysis. Depending on the provider, report details may be processed by a cloud AI service. This advice is free. Do not include names, phone numbers or other personal details.</span></div>
+    <div className="farmer-privacy-banner"><ShieldCheck size={19} /><span><strong>Responsible guidance</strong> If you opt in, the configured AI provider reviews your report and optional photo for cautious next steps. AI suggestions are not confirmed diagnoses and do not prescribe medicines or chemicals. Animal reports receive cautious triage guidance; urgent animal symptoms need prompt veterinary care. Optional videos and voice recordings are saved as private context and are not transcribed or sent for AI analysis. Depending on the provider, report text and photos may be processed by a cloud AI service. This advice is free. Do not include names, phone numbers or other personal details.</span></div>
     {error && <RecordsError error={error} />}
     <section className="farmer-report-card" id="new-crop-case">
       <div className="farmer-form-title"><Camera size={18} /><div><strong>Report a Crop or Animal Problem</strong><span>Choose what needs help. Opt in for cautious AI guidance, then ask a qualified professional to confirm the cause and treatment.</span></div></div>
@@ -516,7 +605,7 @@ export function FarmerCasesPage() {
         <div className="farmer-field-wide farmer-media-picker">
           <strong><FileImage size={17} /> Add a {caseType === "crop" ? "crop" : "animal"} photo (optional)</strong>
           <div className="farmer-media-actions">
-            <button type="button" className="button button-soft" onClick={() => photoCameraInput.current?.click()}>Take a photo</button>
+            <button type="button" className="button button-soft" onClick={() => setCameraOpen(true)}><Camera size={16} /> Take a photo</button>
             <button type="button" className="button button-light" onClick={() => photoBrowseInput.current?.click()}>Browse files</button>
           </div>
           <input ref={photoCameraInput} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={selectPhoto} hidden />
@@ -529,11 +618,24 @@ export function FarmerCasesPage() {
           {recording && <div className="farmer-media-actions"><span className="farmer-recording-time" aria-live="polite">{recordingSeconds}s / 60s</span><button type="button" className="button button-dark" onClick={stopVideoRecording}>Stop recording</button></div>}
           {videoPreview && <div className="farmer-media-preview"><video controls src={videoPreview}>Your browser cannot play this video.</video><button type="button" onClick={() => { setVideoFile(null); setVideoPreview(""); }}>Remove video</button></div>}
         </div>
+        <div className="farmer-field-wide farmer-media-picker">
+          <div className="farmer-video-heading"><strong>Optional voice description</strong><small>Record up to one minute in English or Kiswahili. Saved privately; not transcribed or analyzed by AI.</small></div>
+          {!audioRecording && !audioPreview && <button type="button" className="button button-light" onClick={startAudioRecording}><Mic size={16} /> Record voice description</button>}
+          {audioRecording && <div className="farmer-media-actions"><span className="farmer-recording-time" aria-live="polite">{audioRecordingSeconds}s / 60s</span><button type="button" className="button button-dark" onClick={stopAudioRecording}>Stop recording</button></div>}
+          {audioPreview && !audioRecording && <div className="farmer-media-preview"><audio controls src={audioPreview}>Your browser cannot play this audio.</audio><button type="button" onClick={() => { setAudioFile(null); setAudioPreview(""); }}>Remove voice recording</button></div>}
+        </div>
         <label className="farmer-field-wide farmer-ai-consent"><input type="checkbox" name="allowAi" value="true" onChange={(event) => setAllowAi(event.currentTarget.checked)} /> Get immediate AI guidance: I agree to send this {caseType === "crop" ? "crop" : "animal"} report and optional photo to the configured AI provider. Guidance is not a confirmed diagnosis or a prescription. For animals, contact a veterinarian for urgent or worsening symptoms. Leave unchecked to save the report without AI.</label>
         <p className="farmer-field-wide farmer-privacy-note"><ShieldCheck size={15} /> Your report is private to you. Exact farm coordinates are not collected or shared.</p>
-        <button className="button button-dark" disabled={createCase.isPending}>{createCase.isPending ? "Saving report…" : allowAi ? "Get AI guidance & save report" : "Save report without AI"}</button>
+        <button className="button button-dark" disabled={createCase.isPending || audioRecording || recording}>{audioRecording || recording ? "Finish recording before saving…" : createCase.isPending ? "Saving report…" : allowAi ? "Get AI guidance & save report" : "Save report without AI"}</button>
       </form>
     </section>
+
+    {cameraOpen && <LiveCameraCapture onClose={() => setCameraOpen(false)} onChooseFile={() => photoCameraInput.current?.click()} onCapture={(captured) => {
+      if (photoPreview) URL.revokeObjectURL(photoPreview);
+      setPhotoFile(captured);
+      setPhotoPreview(URL.createObjectURL(captured));
+      setError("");
+    }} />}
 
     <div className="farmer-case-layout">
       <section className="farmer-case-list">
@@ -589,7 +691,7 @@ export function FarmerCasesPage() {
           </div>
           <div className="farmer-case-meta"><span>Started: {selectedCase.startedOn ?? "Not recorded"}</span><span>Spread: {selectedCase.spreadRate}</span>{selectedCase.followUpOn && <span>Follow-up: {selectedCase.followUpOn}</span>}</div>
           <div className="farmer-timeline"><h3>Evidence timeline</h3>{selectedCase.events.map((item) => <article className="farmer-timeline-item" key={item.id}>
-            <span className="farmer-timeline-dot" /><div><small>{new Date(item.createdAt).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })} · {item.type.replaceAll("_", " ")}</small><p>{item.notes}{item.outcome ? ` · Farmer observed: ${item.outcome}` : ""}</p>{item.imageUrl && <a href={imageUrl(item.imageUrl)} target="_blank" rel="noreferrer"><img src={imageUrl(item.imageUrl)} alt={`Crop evidence for ${selectedCase.reference}`} /></a>}{item.videoUrl && <video className="farmer-timeline-video" controls src={imageUrl(item.videoUrl)}>Your browser cannot play this video.</video>}</div>
+            <span className="farmer-timeline-dot" /><div><small>{new Date(item.createdAt).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })} · {item.type.replaceAll("_", " ")}</small><p>{item.notes}{item.outcome ? ` · Farmer observed: ${item.outcome}` : ""}</p>{item.imageUrl && <a href={imageUrl(item.imageUrl)} target="_blank" rel="noreferrer"><img src={imageUrl(item.imageUrl)} alt={`Crop evidence for ${selectedCase.reference}`} /></a>}{item.videoUrl && <video className="farmer-timeline-video" controls src={imageUrl(item.videoUrl)}>Your browser cannot play this video.</video>}{item.audioUrl && <audio controls src={imageUrl(item.audioUrl)}>Your browser cannot play this audio.</audio>}</div>
           </article>)}</div>
           {selectedCase.status !== "closed" && <form className="farmer-event-form" onSubmit={submitEvent}>
             <h3>Record an action, follow-up or observation</h3>

@@ -332,6 +332,25 @@ img { display: block; max-width: 100%; }
 .topbar-right { display: flex; align-items: center; gap: 16px; }
 .connection-pill { display: inline-flex; align-items: center; gap: 7px; color: #7a8576; font-size: 9px; }
 .connection-pill > span { width: 6px; height: 6px; }
+.connection-pill-offline > span { background: #ba714b; box-shadow: 0 0 0 3px #ba714b21; }
+.live-camera-backdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 20px; background: #17231dcc; }
+.live-camera-dialog { width: min(100%, 680px); overflow: hidden; border: 1px solid #e6e9df; border-radius: 16px; background: #fff; box-shadow: 0 24px 80px #10201566; }
+.live-camera-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; }
+.live-camera-header h2 { margin: 4px 0 0; color: #354a38; font-family: var(--serif); font-size: 19px; }
+.live-camera-preview { position: relative; display: grid; min-height: 220px; max-height: min(66vh, 560px); aspect-ratio: 4 / 3; place-items: center; overflow: hidden; background: #152019; }
+.live-camera-preview > video { width: 100%; height: 100%; max-height: min(66vh, 560px); object-fit: contain; }
+.live-camera-message { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; color: #fff; background: #152019e8; text-align: center; }
+.live-camera-message p { max-width: 420px; margin: 12px 0 0; font-size: 13px; line-height: 1.6; }
+.live-camera-message .loader { border-color: #ffffff55; border-top-color: #fff; }
+.live-camera-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 16px 20px; }
+@media (max-width: 520px) {
+  .live-camera-backdrop { padding: 0; }
+  .live-camera-dialog { width: 100%; border: 0; border-radius: 0; }
+  .live-camera-preview { min-height: 220px; max-height: 70vh; }
+  .live-camera-preview > video { max-height: 70vh; }
+  .live-camera-actions { justify-content: stretch; }
+  .live-camera-actions .button { flex: 1; }
+}
 .notification-button { position: relative; width: auto; height: 32px; padding: 0 9px; }
 .notification-button i { display: none; }
 .topbar-avatar { width: 29px; height: 29px; background: #80946b; }

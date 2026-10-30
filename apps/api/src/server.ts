@@ -21,7 +21,7 @@ import { diagnose } from "./diagnostics.js";
 import { db } from "./db.js";
 import { AppError, isUniqueViolation } from "./errors.js";
 import { asyncHandler, authenticate, errorHandler, notFound, requireRole } from "./middleware.js";
-import { saveDiagnosisImage, saveDiagnosisVideo } from "./media.js";
+import { saveCaseAudio, saveDiagnosisImage, saveDiagnosisVideo, saveExpertDocument } from "./media.js";
 import {
   createPasswordResetToken,
   hashPasswordResetToken,
@@ -56,7 +56,7 @@ const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().max(254),
   password: z.string().min(10).max(128),
-  role: z.enum(["farmer", "agrovet"]),
+  role: z.enum(["farmer", "agrovet", "expert"]),
   phone: z.string().trim().min(7).max(30),
   locationRegion: z.string().trim().min(2).max(100),
   preferredLanguage: z.enum(["en", "sw"]).default("en"),
@@ -155,7 +155,7 @@ function privateMediaUrl(url: string, ownerId: string): string {
 }
 
 app.get("/uploads/:filename", asyncHandler(async (req, res) => {
-  const filename = z.string().regex(/^[0-9a-f-]{36}\.(jpg|png|webp|mp4|webm)$/i).parse(req.params.filename);
+  const filename = z.string().regex(/^[0-9a-f-]{36}\.(jpg|png|webp|mp4|webm|pdf)$/i).parse(req.params.filename);
   const relativeUrl = `/uploads/${filename}`;
   const accessToken = z.string().min(1).parse(req.query.token);
   let payload: string | jwt.JwtPayload;
@@ -175,13 +175,15 @@ app.get("/uploads/:filename", asyncHandler(async (req, res) => {
   ) {
     throw new AppError(403, "FORBIDDEN", "This photo is not available to this account.");
   }
-  const [diagnosis, casePhoto] = await Promise.all([
+  const [diagnosis, casePhoto, expertDocument] = await Promise.all([
     db("diagnoses").where({ farmer_id: payload.sub }).andWhere((query) => query
       .where({ image_url: relativeUrl }).orWhere({ video_url: relativeUrl })).first("id"),
     db("crop_case_events").where({ farmer_id: payload.sub }).andWhere((query) => query
-      .where({ image_url: relativeUrl }).orWhere({ video_url: relativeUrl })).first("id"),
+      .where({ image_url: relativeUrl }).orWhere({ video_url: relativeUrl }).orWhere({ audio_url: relativeUrl })).first("id"),
+    db("expert_profiles").where({ user_id: payload.sub }).andWhere((query) => query
+      .where({ license_document_url: relativeUrl }).orWhere({ good_conduct_document_url: relativeUrl })).first("user_id"),
   ]);
-  if (!diagnosis && !casePhoto) throw new AppError(404, "PHOTO_NOT_FOUND", "This private photo was not found.");
+  if (!diagnosis && !casePhoto && !expertDocument) throw new AppError(404, "PHOTO_NOT_FOUND", "This private file was not found.");
   res.setHeader("Cache-Control", "private, max-age=300");
   res.sendFile(path.join(uploadDirectory, filename), (error) => {
     if (error) {
@@ -318,14 +320,16 @@ const upload = multer({
 
 const caseReportUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024, files: 2, fields: 20 },
+  limits: { fileSize: 50 * 1024 * 1024, files: 3, fields: 20 },
   fileFilter: (_req, file, callback) => {
     const allowedImage = file.fieldname === "image" &&
       ["image/jpeg", "image/png", "image/webp"].includes(file.mimetype);
     const allowedVideo = file.fieldname === "video" &&
       ["video/mp4", "video/webm"].includes(file.mimetype);
-    if (!allowedImage && !allowedVideo) {
-      callback(new AppError(415, "UNSUPPORTED_MEDIA", "Choose a JPEG, PNG, or WebP photo and an MP4 or WebM video."));
+    const allowedAudio = file.fieldname === "audio" &&
+      ["audio/mp4", "audio/webm"].includes(file.mimetype);
+    if (!allowedImage && !allowedVideo && !allowedAudio) {
+      callback(new AppError(415, "UNSUPPORTED_MEDIA", "Choose a JPEG, PNG, or WebP photo, MP4/WebM video, or MP4/WebM voice recording."));
       return;
     }
     callback(null, true);
@@ -354,6 +358,108 @@ app.patch("/api/farmer/profile", authenticate, requireRole("farmer"), asyncHandl
     .update({ preferred_language: input.preferredLanguage })
     .returning(["id", "name", "email", "role", "phone", "location_region", "preferred_language", "created_at"]);
   res.json({ data: safeUser(user) });
+}));
+
+const expertDocumentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 2, fields: 10 },
+  fileFilter: (_req, file, callback) => {
+    if (!["image/jpeg", "image/png", "application/pdf"].includes(file.mimetype)) {
+      callback(new AppError(415, "UNSUPPORTED_EXPERT_DOCUMENT", "Choose a JPEG, PNG, or PDF credential document."));
+      return;
+    }
+    callback(null, true);
+  },
+});
+
+function isPdf(buffer: Buffer): boolean {
+  return buffer.length >= 5 && buffer.subarray(0, 5).toString("ascii") === "%PDF-";
+}
+
+function expertProfileRecord(row: DbRecord, ownerId: string) {
+  return {
+    licenseNumber: row.license_number,
+    expertise: row.expertise,
+    licenseDocumentUrl: privateMediaUrl(row.license_document_url, ownerId),
+    goodConductDocumentUrl: privateMediaUrl(row.good_conduct_document_url, ownerId),
+    experienceYears: row.experience_years,
+    available: row.available,
+    serviceRadiusKm: row.service_radius_km,
+    consultationRateKes: Number(row.consultation_rate_kes),
+    verificationStatus: row.verification_status,
+    reviewNote: row.review_note,
+    updatedAt: row.updated_at,
+  };
+}
+
+app.get("/api/expert/profile", authenticate, requireRole("expert"), asyncHandler(async (req, res) => {
+  const profile = await db("expert_profiles").where({ user_id: req.auth!.userId }).first() as DbRecord | undefined;
+  res.json({ data: profile ? expertProfileRecord(profile, req.auth!.userId) : null });
+}));
+
+app.put("/api/expert/profile", authenticate, requireRole("expert"), expertDocumentUpload.fields([
+  { name: "licenseDocument", maxCount: 1 },
+  { name: "goodConductDocument", maxCount: 1 },
+]), asyncHandler(async (req, res) => {
+  const input = z.object({
+    licenseNumber: z.string().trim().min(3).max(100),
+    expertise: z.enum(["veterinary_medicine", "agronomy", "poultry", "crop_protection", "animal_health", "other"]),
+    experienceYears: z.coerce.number().int().min(0).max(80),
+    available: z.enum(["true", "false"]).transform((value) => value === "true"),
+    serviceRadiusKm: z.coerce.number().int().min(1).max(1000),
+    consultationRateKes: z.coerce.number().min(0).max(1000000),
+  }).parse(req.body);
+  const files = req.files as { licenseDocument?: Express.Multer.File[]; goodConductDocument?: Express.Multer.File[] } | undefined;
+  const licenseFile = files?.licenseDocument?.[0];
+  const goodConductFile = files?.goodConductDocument?.[0];
+  if (!licenseFile || !goodConductFile) {
+    throw new AppError(400, "EXPERT_DOCUMENTS_REQUIRED", "Upload both your professional credential and Certificate of Good Conduct.");
+  }
+  const documentExtension = (file: Express.Multer.File): "jpg" | "png" | "pdf" => {
+    if (file.mimetype === "image/jpeg" && detectedImageType(file.buffer) === "image/jpeg") return "jpg";
+    if (file.mimetype === "image/png" && detectedImageType(file.buffer) === "image/png") return "png";
+    if (file.mimetype === "application/pdf" && isPdf(file.buffer)) return "pdf";
+    throw new AppError(415, "INVALID_EXPERT_DOCUMENT", "A credential document does not match its file type.");
+  };
+  const licenseExtension = documentExtension(licenseFile);
+  const goodConductExtension = documentExtension(goodConductFile);
+  let licenseMedia: Awaited<ReturnType<typeof saveExpertDocument>> | undefined;
+  let goodConductMedia: Awaited<ReturnType<typeof saveExpertDocument>> | undefined;
+  try {
+    licenseMedia = await saveExpertDocument(licenseFile.buffer, licenseExtension);
+    goodConductMedia = await saveExpertDocument(goodConductFile.buffer, goodConductExtension);
+    const profile = await db.transaction(async (trx) => {
+      const [savedProfile] = await trx("expert_profiles").insert({
+        user_id: req.auth!.userId,
+        license_number: input.licenseNumber,
+        expertise: input.expertise,
+        license_document_url: licenseMedia!.url,
+        good_conduct_document_url: goodConductMedia!.url,
+        experience_years: input.experienceYears,
+        available: input.available,
+        service_radius_km: input.serviceRadiusKm,
+        consultation_rate_kes: input.consultationRateKes,
+        verification_status: "pending",
+        reviewed_by: null,
+        reviewed_at: null,
+        review_note: "",
+        updated_at: trx.fn.now(),
+      }).onConflict("user_id").merge().returning("*") as DbRecord[];
+      await trx("users").where({ id: req.auth!.userId }).update({
+        expert_credentials_verified: false,
+        expert_available: false,
+      });
+      return savedProfile;
+    });
+    if (!profile) throw new AppError(500, "EXPERT_PROFILE_SAVE_FAILED", "The professional profile could not be saved.");
+    res.json({ data: expertProfileRecord(profile, req.auth!.userId) });
+  } catch (error) {
+    await Promise.all([
+      licenseMedia?.delete().catch((cleanupError: unknown) => console.error("Failed to clean up uploaded license document", cleanupError)),
+      goodConductMedia?.delete().catch((cleanupError: unknown) => console.error("Failed to clean up uploaded conduct certificate", cleanupError)),
+    ]);
+    throw error;
+  }
 }));
 
 const farmSchema = z.object({
@@ -528,6 +634,7 @@ function caseRecord(row: DbRecord, events: DbRecord[]) {
       id: event.id, type: event.event_type, notes: event.notes, outcome: event.outcome,
       imageUrl: event.image_url ? privateMediaUrl(event.image_url, event.farmer_id) : null,
       videoUrl: event.video_url ? privateMediaUrl(event.video_url, event.farmer_id) : null,
+      audioUrl: event.audio_url ? privateMediaUrl(event.audio_url, event.farmer_id) : null,
       followUpOn: event.follow_up_on, createdAt: event.created_at,
     })),
   };
@@ -614,10 +721,12 @@ app.get("/api/cases/:caseId/agrovets", authenticate, requireRole("farmer"), asyn
 app.post("/api/cases", authenticate, requireRole("farmer"), caseReportUpload.fields([
   { name: "image", maxCount: 1 },
   { name: "video", maxCount: 1 },
+  { name: "audio", maxCount: 1 },
 ]), asyncHandler(async (req, res) => {
-  const uploadedFiles = req.files as { image?: Express.Multer.File[]; video?: Express.Multer.File[] } | undefined;
+  const uploadedFiles = req.files as { image?: Express.Multer.File[]; video?: Express.Multer.File[]; audio?: Express.Multer.File[] } | undefined;
   const image = uploadedFiles?.image?.[0];
   const video = uploadedFiles?.video?.[0];
+  const audio = uploadedFiles?.audio?.[0];
   const input = caseReportSchema.parse(req.body);
   if (input.farmId) {
     const farm = await db("farms").where({ id: input.farmId, farmer_id: req.auth!.userId }).first("id");
@@ -640,8 +749,16 @@ app.post("/api/cases", authenticate, requireRole("farmer"), caseReportUpload.fie
   if (video && (!videoType || videoType !== video.mimetype.split(";")[0])) {
     throw new AppError(415, "UNSUPPORTED_VIDEO", "The video format could not be verified. Choose an MP4 or WebM video.");
   }
+  if (audio && audio.size > 10 * 1024 * 1024) {
+    throw new AppError(413, "AUDIO_TOO_LARGE", "Choose a voice recording smaller than 10 MB.");
+  }
+  const audioType = audio ? detectedAudioType(audio.buffer) : null;
+  if (audio && (!audioType || audioType !== audio.mimetype.split(";")[0])) {
+    throw new AppError(415, "UNSUPPORTED_AUDIO", "The voice recording format could not be verified. Choose an MP4 or WebM recording.");
+  }
   let media: Awaited<ReturnType<typeof saveDiagnosisImage>> | undefined;
   let videoMedia: Awaited<ReturnType<typeof saveDiagnosisVideo>> | undefined;
+  let audioMedia: Awaited<ReturnType<typeof saveCaseAudio>> | undefined;
   const mediaStorageFailures: string[] = [];
   try {
     if (image && imageType) {
@@ -668,6 +785,20 @@ app.post("/api/cases", authenticate, requireRole("farmer"), caseReportUpload.fie
           method: req.method,
           path: req.path,
           message: "Initial crop report video could not be stored.",
+          cause: error instanceof Error ? error.message : "Unknown media storage error",
+        }));
+      }
+    }
+    if (audio && audioType) {
+      try {
+        audioMedia = await saveCaseAudio(audio.buffer, audioType === "audio/mp4" ? "mp4" : "webm");
+      } catch (error) {
+        mediaStorageFailures.push("voice recording");
+        console.error(JSON.stringify({
+          level: "error",
+          method: req.method,
+          path: req.path,
+          message: "Initial crop report voice recording could not be stored.",
           cause: error instanceof Error ? error.message : "Unknown media storage error",
         }));
       }
@@ -732,6 +863,11 @@ app.post("/api/cases", authenticate, requireRole("farmer"), caseReportUpload.fie
         notes: "Initial farm video context. This video was not sent for AI analysis.",
         video_url: videoMedia.url,
       });
+      if (audioMedia) await trx("crop_case_events").insert({
+        case_id: row.id, farmer_id: req.auth!.userId, event_type: "audio",
+        notes: "Farmer voice description. This recording was not transcribed or sent for AI analysis.",
+        audio_url: audioMedia.url,
+      });
       return row as DbRecord;
     });
     const events = await db("crop_case_events").where({ case_id: result.id }).orderBy("created_at", "asc") as DbRecord[];
@@ -742,6 +878,7 @@ app.post("/api/cases", authenticate, requireRole("farmer"), caseReportUpload.fie
     await Promise.all([
       media?.delete().catch((cleanupError: unknown) => console.error("Failed to clean up uploaded case image", cleanupError)),
       videoMedia?.delete().catch((cleanupError: unknown) => console.error("Failed to clean up uploaded case video", cleanupError)),
+      audioMedia?.delete().catch((cleanupError: unknown) => console.error("Failed to clean up uploaded case audio", cleanupError)),
     ]);
     throw error;
   }
@@ -906,16 +1043,82 @@ function detectedVideoType(buffer: Buffer): "video/mp4" | "video/webm" | null {
   return null;
 }
 
+function detectedAudioType(buffer: Buffer): "audio/mp4" | "audio/webm" | null {
+  if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "audio/webm";
+  if (buffer.length >= 12 && buffer.toString("ascii", 4, 8) === "ftyp") return "audio/mp4";
+  return null;
+}
+
 app.get("/api/experts", asyncHandler(async (_req, res) => {
-  const experts = await db("users").select("id", "name", "location_region")
+  const experts = await db("users")
+    .leftJoin("expert_profiles", "users.id", "expert_profiles.user_id")
+    .select(
+      "users.id", "users.name", "users.location_region",
+      "expert_profiles.expertise", "expert_profiles.service_radius_km",
+      "expert_profiles.consultation_rate_kes",
+    )
     .where({
-      role: "expert",
-      expert_credentials_verified: true,
-      expert_available: true,
-    }).orderBy("name").limit(50);
+      "users.role": "expert",
+      "users.expert_credentials_verified": true,
+      "users.expert_available": true,
+    }).andWhere((query) => query
+      .where("expert_profiles.verification_status", "verified")
+      .orWhereNull("expert_profiles.user_id"))
+    .orderBy("users.name").limit(50);
   res.json({ data: experts.map((expert) => ({
     id: expert.id, name: expert.name, locationRegion: expert.location_region,
+    expertise: expert.expertise ?? null, serviceRadiusKm: expert.service_radius_km ?? null,
+    consultationRateKes: expert.consultation_rate_kes == null ? null : Number(expert.consultation_rate_kes),
   })) });
+}));
+
+app.get("/api/admin/expert-verification", authenticate, requireRole("admin"), asyncHandler(async (req, res) => {
+  const status = z.enum(["pending", "verified", "rejected"]).default("pending").parse(req.query.status);
+  const profiles = await db("expert_profiles")
+    .join("users", "expert_profiles.user_id", "users.id")
+    .where("expert_profiles.verification_status", status)
+    .select(
+      "expert_profiles.*", "users.name", "users.email", "users.phone",
+      "users.location_region",
+    )
+    .orderBy("expert_profiles.created_at", "asc")
+    .limit(100) as DbRecord[];
+  res.json({ data: profiles.map((profile) => ({
+    userId: profile.user_id,
+    name: profile.name,
+    email: profile.email,
+    phone: profile.phone,
+    locationRegion: profile.location_region,
+    ...expertProfileRecord(profile, profile.user_id),
+  })) });
+}));
+
+app.patch("/api/admin/expert-verification/:userId", authenticate, requireRole("admin"), asyncHandler(async (req, res) => {
+  const userId = z.string().uuid().parse(req.params.userId);
+  const input = z.object({
+    status: z.enum(["verified", "rejected"]),
+    reviewNote: z.string().trim().max(1000).default(""),
+  }).superRefine((value, context) => {
+    if (value.status === "rejected" && value.reviewNote.length < 3) {
+      context.addIssue({ code: "custom", path: ["reviewNote"], message: "Give the professional a reason for rejection." });
+    }
+  }).parse(req.body);
+  await db.transaction(async (trx) => {
+    const profile = await trx("expert_profiles").where({ user_id: userId }).first("available");
+    if (!profile) throw new AppError(404, "EXPERT_PROFILE_NOT_FOUND", "This professional has not submitted a profile for review.");
+    await trx("expert_profiles").where({ user_id: userId }).update({
+      verification_status: input.status,
+      reviewed_by: req.auth!.userId,
+      reviewed_at: trx.fn.now(),
+      review_note: input.reviewNote,
+      updated_at: trx.fn.now(),
+    });
+    await trx("users").where({ id: userId, role: "expert" }).update({
+      expert_credentials_verified: input.status === "verified",
+      expert_available: input.status === "verified" && profile.available,
+    });
+  });
+  res.json({ data: { userId, verificationStatus: input.status } });
 }));
 
 app.get("/api/photo-payments/status", authenticate, requireRole("farmer"), asyncHandler(async (req, res) => {

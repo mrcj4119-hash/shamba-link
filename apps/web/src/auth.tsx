@@ -12,7 +12,7 @@ interface AuthValue {
     name: string;
     email: string;
     password: string;
-    role: "farmer" | "agrovet";
+    role: "farmer" | "agrovet" | "expert";
     phone: string;
     locationRegion: string;
     preferredLanguage: "en" | "sw";

@@ -108,6 +108,7 @@
 .farmer-video-heading strong { color: #4a584a; font-size: 10px; }
 .farmer-video-heading small { color: #858d81; font-size: 9px; }
 .farmer-recording-time { color: #a55040; font-size: 11px; font-weight: 700; }
+.farmer-timeline-item audio, .farmer-media-preview audio { width: min(100%, 360px); }
 .farmer-media-preview { display: grid; width: min(100%, 360px); gap: 7px; }
 .farmer-media-preview img, .farmer-media-preview video { display: block; width: 100%; max-height: 260px; border-radius: 7px; background: #252825; object-fit: contain; }
 .farmer-media-preview > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #697567; font-size: 9px; }

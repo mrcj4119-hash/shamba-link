@@ -20,13 +20,14 @@ if (usingCloudinary) {
 async function saveMedia(
   buffer: Buffer,
   extension: string,
-  resourceType: "image" | "video",
+  resourceType: "image" | "video" | "raw",
+  folder = "shamba-link/diagnoses",
 ): Promise<{ url: string; delete: () => Promise<void> }> {
   if (usingCloudinary) {
     const uploaded = await new Promise<{ public_id: string }>((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         {
-          folder: "shamba-link/diagnoses",
+          folder,
           resource_type: resourceType,
           type: "authenticated",
           use_filename: false,
@@ -47,7 +48,7 @@ async function saveMedia(
         type: "authenticated",
         sign_url: true,
         resource_type: resourceType,
-        ...(resourceType === "video" ? { format: extension } : {}),
+        ...(resourceType !== "image" ? { format: extension } : {}),
       }),
       delete: async () => {
         await cloudinary.uploader.destroy(uploaded.public_id, {
@@ -86,4 +87,23 @@ export function saveDiagnosisVideo(
   extension: "mp4" | "webm",
 ): Promise<{ url: string; delete: () => Promise<void> }> {
   return saveMedia(buffer, extension, "video");
+}
+
+export function saveExpertDocument(
+  buffer: Buffer,
+  extension: "jpg" | "png" | "pdf",
+): Promise<{ url: string; delete: () => Promise<void> }> {
+  return saveMedia(
+    buffer,
+    extension,
+    extension === "pdf" ? "raw" : "image",
+    "shamba-link/expert-documents",
+  );
+}
+
+export function saveCaseAudio(
+  buffer: Buffer,
+  extension: "mp4" | "webm",
+): Promise<{ url: string; delete: () => Promise<void> }> {
+  return saveMedia(buffer, extension, "video", "shamba-link/case-audio");
 }

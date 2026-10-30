@@ -160,11 +160,12 @@ export type CaseStatus =
 
 export interface CropCaseEvent {
   id: string;
-  type: "reported" | "action" | "follow_up" | "observation" | "expert_request" | "status_change" | "photo" | "video";
+  type: "reported" | "action" | "follow_up" | "observation" | "expert_request" | "status_change" | "photo" | "video" | "audio";
   notes: string;
   outcome: "improved" | "unchanged" | "worsened" | null;
   imageUrl: string | null;
   videoUrl: string | null;
+  audioUrl: string | null;
   followUpOn: string | null;
   createdAt: string;
 }
@@ -244,6 +245,31 @@ export interface Product {
 export interface Expert {
   id: string;
   name: string;
+  locationRegion: string;
+  expertise: string | null;
+  serviceRadiusKm: number | null;
+  consultationRateKes: number | null;
+}
+
+export interface ExpertProfile {
+  licenseNumber: string;
+  expertise: string;
+  licenseDocumentUrl: string;
+  goodConductDocumentUrl: string;
+  experienceYears: number;
+  available: boolean;
+  serviceRadiusKm: number;
+  consultationRateKes: number;
+  verificationStatus: "pending" | "verified" | "rejected";
+  reviewNote: string;
+  updatedAt: string;
+}
+
+export interface ExpertVerificationRecord extends ExpertProfile {
+  userId: string;
+  name: string;
+  email: string;
+  phone: string;
   locationRegion: string;
 }
 

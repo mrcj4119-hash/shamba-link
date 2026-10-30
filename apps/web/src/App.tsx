@@ -26,6 +26,8 @@ import type { FunZoneActivity, FunZoneScores } from "./fun-zone-score";
 import { funZoneGames } from "./fun-zone-games";
 import type { FunZoneGame, FunZoneQuestion } from "./fun-zone-games";
 import { KnowledgeLibrary } from "./KnowledgeLibrary";
+import { ExpertProfilePage, ExpertVerificationPage } from "./ExpertProfile";
+import { LiveCameraCapture } from "./LiveCameraCapture";
 import { PhotoPaymentGate, PhotoPaymentReviewPage, usePaymentReviewerCapability, usePhotoPaymentAccess } from "./PhotoPayment";
 import type { Consultation, Diagnosis, Expert, Order, Page, Product, UserRole } from "./types";
 
@@ -48,12 +50,14 @@ const navItems: Record<UserRole, { to: string; label: string; icon: typeof Leaf 
   expert: [
     { to: "/app", label: "Overview", icon: Sprout },
     { to: "/app/consultations", label: "My schedule", icon: CalendarDays },
+    { to: "/app/expert-profile", label: "Credentials & profile", icon: BadgeCheck },
   ],
   admin: [
     { to: "/app", label: "Overview", icon: ShieldCheck },
     { to: "/app/admin-users", label: "User management", icon: Users },
     { to: "/app/admin-cases", label: "Crop reports", icon: ClipboardCheck },
     { to: "/app/admin-guides", label: "Farming guides", icon: BookOpen },
+    { to: "/app/expert-verification", label: "Expert vetting", icon: BadgeCheck },
     { to: "/app/payment-review", label: "Review payments", icon: ClipboardList },
   ],
 };
@@ -91,6 +95,8 @@ function App() {
         <Route path="admin-users" element={user?.role === "admin" ? <AdminUsersPage /> : <Navigate to="/app" replace />} />
         <Route path="admin-cases" element={user?.role === "admin" ? <AdminCasesPage /> : <Navigate to="/app" replace />} />
         <Route path="admin-guides" element={user?.role === "admin" ? <AdminGuidesPage /> : <Navigate to="/app" replace />} />
+        <Route path="expert-profile" element={user?.role === "expert" ? <ExpertProfilePage /> : <Navigate to="/app" replace />} />
+        <Route path="expert-verification" element={user?.role === "admin" ? <ExpertVerificationPage /> : <Navigate to="/app" replace />} />
         <Route path="marketplace" element={user?.role !== "admin" ? <MarketplacePage /> : <Navigate to="/app" replace />} />
         <Route path="consultations" element={user?.role !== "admin" ? <ConsultationsPage /> : <Navigate to="/app" replace />} />
         <Route path="orders" element={user?.role !== "admin" ? <OrdersPage /> : <Navigate to="/app" replace />} />
@@ -394,19 +400,21 @@ function AuthPage({ mode }: { mode: "login" | "register" }) {
     const form = new FormData(event.currentTarget);
     try {
       if (registering) {
+        const role = String(form.get("role")) as "farmer" | "agrovet" | "expert";
         await signUp({
           name: String(form.get("name")),
           email: String(form.get("email")),
           password: String(form.get("password")),
-          role: String(form.get("role")) as "farmer" | "agrovet",
+          role,
           phone: String(form.get("phone")),
           locationRegion: String(form.get("region")),
           preferredLanguage: String(form.get("language")) as "en" | "sw",
         });
+        navigate(role === "expert" ? "/app/expert-profile" : "/app");
       } else {
         await signIn(String(form.get("email")), String(form.get("password")));
+        navigate("/app");
       }
-      navigate("/app");
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -416,7 +424,7 @@ function AuthPage({ mode }: { mode: "login" | "register" }) {
 
   return <main className="auth-page" style={{ backgroundImage: `linear-gradient(rgba(255, 255, 255, .78), rgba(255, 255, 255, .78)), url("${authBackground}")` }}><div className="auth-side"><Brand inverse /><div className="auth-side-content"><span className="auth-quote-mark">“</span><h2>It takes a community to grow something good.</h2><p>We’re glad you’re here. Let’s make this season a little easier, together.</p><span className="auth-side-credit">SHAMBA LINK · GROWING TOGETHER</span></div><span className="auth-side-bottom">Better seasons start with connection.</span></div><section className="auth-form-side"><Link className={`back-home${registering ? "" : " login-back-home"}`} to="/">Back to home</Link><div className={`auth-form-wrap${registering ? "" : " login-form-wrap"}`}><div className="form-kicker">{registering ? "YOUR NEXT CHAPTER" : "WELCOME BACK"}</div><h1>{registering ? "Come on in." : "Good to see you."}</h1><p className="auth-subtitle">{registering ? "Let’s get you set up for a growing season." : "Your community and your next good season are waiting."}</p>
       <form className="auth-form" onSubmit={submit}>
-        {registering && <><label>Your name<input name="name" placeholder="e.g. Amina Njeri" autoComplete="name" required minLength={2} /></label><label>I’m joining as<select name="role" defaultValue="farmer"><option value="farmer">A farmer</option><option value="agrovet">An agrovet / shop</option></select></label><label>Preferred language<select name="language" defaultValue="en"><option value="en">English</option><option value="sw">Kiswahili</option></select></label></>}
+        {registering && <><label>Your name<input name="name" placeholder="e.g. Amina Njeri" autoComplete="name" required minLength={2} /></label><label>I’m joining as<select name="role" defaultValue="farmer"><option value="farmer">A farmer</option><option value="agrovet">An agrovet / shop</option><option value="expert">A veterinary or agricultural expert</option></select></label><label>Preferred language<select name="language" defaultValue="en"><option value="en">English</option><option value="sw">Kiswahili</option></select></label></>}
         <label>Email address<input name="email" type="email" placeholder="you@example.com" autoComplete="email" required /></label>
         <label>Password<input name="password" type="password" placeholder={registering ? "At least 10 characters" : "Your password"} autoComplete={registering ? "new-password" : "current-password"} minLength={registering ? 10 : 1} required /></label>
         {registering && <><label>Phone number<input name="phone" type="tel" placeholder="+254 7xx xxx xxx" autoComplete="tel" required /></label><label>Your county / region<input name="region" placeholder="e.g. Kiambu" autoComplete="address-level1" required /></label></>}
@@ -495,6 +503,16 @@ function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const updateConnection = () => setOnline(navigator.onLine);
+    window.addEventListener("online", updateConnection);
+    window.addEventListener("offline", updateConnection);
+    return () => {
+      window.removeEventListener("online", updateConnection);
+      window.removeEventListener("offline", updateConnection);
+    };
+  }, []);
   const reviewerCapability = usePaymentReviewerCapability();
   const visibleNavItems = reviewerCapability.data?.data.canReview && user!.role !== "admin"
     ? [...navItems[user!.role], { to: "/app/payment-review", label: "Review payments", icon: ClipboardList }]
@@ -525,7 +543,7 @@ function AppShell() {
     <div className="sidebar-bottom"><div className="help-card"><span className="help-spark"><Zap size={16} /></span><strong>A little help?</strong><p>Our friendly team is here for you.</p><a href={supportPhoneHref}>Call {supportPhone}</a></div><button className="side-link signout-link" onClick={signOut}><LogOut size={18} /><span>Sign out</span></button><div className="side-profile"><span className="profile-avatar">{initials(user!.name)}</span><span><strong>{user?.name}</strong><small>{user?.email}</small></span></div></div>
   </aside>
   {menuOpen && <button className="mobile-scrim" onClick={() => setMenuOpen(false)} aria-label="Close navigation" />}
-  <div className="main-shell" style={{ backgroundImage: `linear-gradient(rgba(247, 248, 243, .70), rgba(247, 248, 243, .70)), url("${pageBackground}")` }}><header className="topbar"><div className="topbar-leading"><button className="fun-zone-back back-button" onClick={goBack} disabled={!hasPreviousPage && location.pathname === "/app"} aria-label="Go back" title="Go back">Back</button><button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Open navigation">Menu</button><div className="breadcrumb"><span>{user?.role === "admin" ? "Admin" : "My farm"}</span><strong>{current?.label ?? "Overview"}</strong></div></div><div className="topbar-right"><span className="connection-pill"><span /> All systems growing</span><button className="icon-button notification-button" aria-label="Notifications">Notifications</button><button className="topbar-signout" onClick={signOut}><LogOut size={16} /><span>Sign out</span></button></div></header><main className="app-content"><Outlet /></main><footer className="app-footer"><span>Growing together, one season at a time.</span><span>Need a hand? <a href={supportPhoneHref}>Call {supportPhone}</a></span></footer></div></div>;
+  <div className="main-shell" style={{ backgroundImage: `linear-gradient(rgba(247, 248, 243, .70), rgba(247, 248, 243, .70)), url("${pageBackground}")` }}><header className="topbar"><div className="topbar-leading"><button className="fun-zone-back back-button" onClick={goBack} disabled={!hasPreviousPage && location.pathname === "/app"} aria-label="Go back" title="Go back">Back</button><button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Open navigation">Menu</button><div className="breadcrumb"><span>{user?.role === "admin" ? "Admin" : "My farm"}</span><strong>{current?.label ?? "Overview"}</strong></div></div><div className="topbar-right"><span className={`connection-pill${online ? "" : " connection-pill-offline"}`} role="status"><span />{online ? "Online" : "Offline · saved guides available"}</span><button className="icon-button notification-button" aria-label="Notifications">Notifications</button><button className="topbar-signout" onClick={signOut}><LogOut size={16} /><span>Sign out</span></button></div></header><main className="app-content"><Outlet /></main><footer className="app-footer"><span>Growing together, one season at a time.</span><span>Need a hand? <a href={supportPhoneHref}>Call {supportPhone}</a></span></footer></div></div>;
 }
 
 function roleLabel(role: UserRole) {
@@ -635,6 +653,7 @@ function DiagnosisPage() {
   const [result, setResult] = useState<Diagnosis | null>(null);
   const [error, setError] = useState("");
   const [showPayment, setShowPayment] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const photoCameraInput = useRef<HTMLInputElement>(null);
   const photoFileInput = useRef<HTMLInputElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -789,7 +808,7 @@ function DiagnosisPage() {
             </> : <>
               <span className="upload-icon"><Camera size={24} /></span><strong>Choose a photo for AI feedback</strong><span>Get close, find good light, and keep it in focus.</span><small>JPEG, PNG or WebP · up to 8 MB</small>
               <div className="upload-actions">
-                <button type="button" className="button button-soft upload-choose" onClick={() => photoCameraInput.current?.click()}>Take a photo</button>
+                <button type="button" className="button button-soft upload-choose" onClick={() => setCameraOpen(true)}><Camera size={16} /> Take a photo</button>
                 <button type="button" className="button button-light upload-choose" onClick={() => photoFileInput.current?.click()}>Browse files</button>
               </div>
             </>}
@@ -816,6 +835,13 @@ function DiagnosisPage() {
         <div className="tips-card"><span className="form-kicker">A FEW PHOTO TIPS</span><ul><li><Check size={15} /> Natural light works best</li><li><Check size={15} /> Focus on the affected area</li><li><Check size={15} /> Include the whole leaf or plant</li></ul></div>
       </aside>
     </div>
+    {cameraOpen && <LiveCameraCapture onClose={() => setCameraOpen(false)} onChooseFile={() => photoCameraInput.current?.click()} onCapture={(captured) => {
+      if (preview) URL.revokeObjectURL(preview);
+      setFile(captured);
+      setPreview(URL.createObjectURL(captured));
+      setResult(null);
+      setError("");
+    }} />}
     {result && <section className="result-card"><div className="result-title"><span className="result-icon"><Sprout size={19} /></span><div><div className="form-kicker">AI PHOTO ASSESSMENT</div><h2>{result.detectedDisease}</h2></div><span className={`severity severity-${result.severityLevel}`}>{result.severityLevel}</span></div>{result.videoUrl && <video className="diagnosis-video" controls src={imageUrl(result.videoUrl)}>Your browser cannot play this video.</video>}<div className="result-notice"><ShieldCheck size={16} /><span>Assessment based on the photo you shared · AI confidence estimate: {Math.round(result.confidenceScore * 100)}%</span></div><div className="result-columns"><div><strong>A helpful next step</strong><p>{result.treatmentRecommendations}</p></div><div><strong>Looking ahead</strong><p>{result.preventiveMeasures}</p></div></div><Link to="/app/consultations" className="button button-dark">Talk it through with an expert</Link></section>}
     <section className="history-section"><div className="section-row"><div><div className="form-kicker">YOUR FARM JOURNAL</div><h2>Previous check-ins</h2></div><span className="history-count">{history.data?.total ?? 0} {history.data?.total === 1 ? "check-in" : "check-ins"}</span></div>{history.isError ? <ErrorPanel text={message(history.error)} /> : history.isLoading ? <LoadingLines /> : history.data?.data.length ? <div className="content-card history-list">{history.data.data.map((diagnosis) => <DiagnosisRow key={diagnosis.id} diagnosis={diagnosis} />)}</div> : <EmptyState icon={<FileImage />} title="No check-ins just yet" body="Your crop journal will be here whenever you need it." />}</section>
   </div>;
@@ -977,9 +1003,9 @@ function ConsultationsPage() {
   const active = appointments.data?.data.filter((item) => item.status === "pending") ?? [];
   const past = appointments.data?.data.filter((item) => item.status !== "pending") ?? [];
 
-  return <div className="page-stack"><PageHeading eyebrow={isFarmer ? "A FRIENDLY FACE, A GOOD CONVERSATION" : "YOUR EXPERT PRACTICE"} title={isFarmer ? "Let’s talk it through." : "Your time makes a difference."} description={isFarmer ? "Request a conversation with a professional profile listed in Shamba Link. The demo does not independently verify credentials or promise availability." : "See the farmers who would like a little of your time and know-how."} />
+  return <div className="page-stack"><PageHeading eyebrow={isFarmer ? "A FRIENDLY FACE, A GOOD CONVERSATION" : "YOUR EXPERT PRACTICE"} title={isFarmer ? "Let’s talk it through." : "Your time makes a difference."} description={isFarmer ? "Request a conversation with a professional whose credentials have been reviewed by Shamba Link. A request still needs confirmation." : "See the farmers who would like a little of your time and know-how."} />
     {error && <div className={error.startsWith("Your consultation") ? "success-banner" : "inline-error"}>{error.startsWith("Your consultation") ? <CheckCircle2 size={17} /> : <CircleHelp size={17} />}{error}<button className="dismiss-inline" onClick={() => setError("")} aria-label="Dismiss">Dismiss</button></div>}
-    {isFarmer && <section className="booking-layout"><form className="content-card booking-form" onSubmit={book}><div className="form-kicker">REQUEST A CONVERSATION</div><h2>Choose a time that works for you.</h2><p className="muted-copy">A request is recorded in your account. The professional must confirm before it is an appointment.</p><label>Who would you like to talk with?<select name="expertId" required defaultValue="">{experts.data?.data.map((expert) => <option key={expert.id} value={expert.id}>{expert.name} · {expert.locationRegion}</option>)}</select>{experts.data?.data.length === 0 && <small>No verified professionals are currently listed. Demo profiles are hidden until credentials and availability have been confirmed.</small>}</label><label>When works for you?<input type="datetime-local" name="time" min={new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16)} required /></label><label>What would you like help with? <small>(optional)</small><textarea name="notes" rows={3} maxLength={2000} placeholder="A little about what's happening on your farm…" defaultValue={consultationNotes} /></label><button className="button button-dark" disabled={booking.isPending || !experts.data?.data.length}>{booking.isPending ? "Sending your request…" : "Request this appointment"}</button></form><aside className="expert-info-card"><div className="expert-photo expert-photo-placeholder"><Stethoscope size={30} /><span><BadgeCheck size={14} /> CREDENTIAL REVIEW REQUIRED</span></div><div className="expert-info-copy"><div className="form-kicker">PROFESSIONAL SUPPORT</div><h3>A listening ear makes all the difference.</h3><p>No professional profile is shown as verified until credentials have been reviewed.</p><div className="expert-benefit"><span><Check size={15} /></span><span><strong>Share your question and context</strong><small>Your farm, your goals, your conversation.</small></span></div><div className="expert-benefit"><span><Check size={15} /></span><span><strong>Request status stays in your account</strong><small>A request is not a confirmed appointment.</small></span></div></div></aside></section>}
+    {isFarmer && <section className="booking-layout"><form className="content-card booking-form" onSubmit={book}><div className="form-kicker">REQUEST A CONVERSATION</div><h2>Choose a time that works for you.</h2><p className="muted-copy">A request is recorded in your account. The professional must confirm before it is an appointment.</p><label>Who would you like to talk with?<select name="expertId" required defaultValue=""><option value="" disabled>Select a verified professional</option>{experts.data?.data.map((expert) => <option key={expert.id} value={expert.id}>{expert.name} · {expert.expertise ?? "Agricultural expert"} · {expert.locationRegion}{expert.consultationRateKes !== null ? ` · KES ${expert.consultationRateKes}` : ""}</option>)}</select>{experts.data?.data.length === 0 && <small>No verified professionals are currently listed. New profiles are shown after an administrator checks their documents and availability.</small>}</label><label>When works for you?<input type="datetime-local" name="time" min={new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16)} required /></label><label>What would you like help with? <small>(optional)</small><textarea name="notes" rows={3} maxLength={2000} placeholder="A little about what's happening on your farm…" defaultValue={consultationNotes} /></label><button className="button button-dark" disabled={booking.isPending || !experts.data?.data.length}>{booking.isPending ? "Sending your request…" : "Request this appointment"}</button></form><aside className="expert-info-card"><div className="expert-photo expert-photo-placeholder"><Stethoscope size={30} /><span><BadgeCheck size={14} /> CREDENTIAL REVIEW REQUIRED</span></div><div className="expert-info-copy"><div className="form-kicker">PROFESSIONAL SUPPORT</div><h3>A listening ear makes all the difference.</h3><p>Professional documents are checked by an administrator before a new expert profile is listed.</p><div className="expert-benefit"><span><Check size={15} /></span><span><strong>Share your question and context</strong><small>Your farm, your goals, your conversation.</small></span></div><div className="expert-benefit"><span><Check size={15} /></span><span><strong>Request status stays in your account</strong><small>A request is not a confirmed appointment.</small></span></div></div></aside></section>}
     <section className="appointments-section"><div className="section-row"><div><div className="form-kicker">{isFarmer ? "YOUR PLANS" : "COMING UP"}</div><h2>{isFarmer ? "Your expert visits" : "Upcoming conversations"}</h2></div><span className="history-count">{active.length} upcoming</span></div>{appointments.isError ? <ErrorPanel text={message(appointments.error)} /> : appointments.isLoading ? <LoadingLines /> : active.length ? <div className="appointment-list">{active.map((appointment) => <AppointmentRow key={appointment.id} appointment={appointment} expert={experts.data?.data.find((item) => item.id === appointment.expertId)} onUpdate={(status) => updateStatus.mutate({ id: appointment.id, status })} updating={updateStatus.isPending} isFarmer={isFarmer} />)}</div> : <EmptyState icon={<CalendarDays />} title="A little space in the calendar" body={isFarmer ? "When you’re ready for a conversation, book a time above." : "There are no conversations on your schedule just now."} />}</section>
     {past.length > 0 && <section className="appointments-section"><div className="section-row"><div><div className="form-kicker">A LOOK BACK</div><h2>Past conversations</h2></div></div><div className="appointment-list">{past.map((appointment) => <AppointmentRow key={appointment.id} appointment={appointment} expert={experts.data?.data.find((item) => item.id === appointment.expertId)} isFarmer={isFarmer} />)}</div></section>}
   </div>;

@@ -57,16 +57,20 @@ Signing in and using the farmer workspace are free. The separate crop/livestock 
 Set `PAYMENT_REVIEWER_EMAILS` in `.env` to a comma-separated list of existing Shamba Link account emails authorized to verify receipts. These accounts see **Review payments** in the app navigation. Reviewers must check the receipt against the actual M-Pesa transaction record before approving or rejecting it. Do not enter reviewer passwords or M-Pesa credentials in this setting.
 
 The database migration adds the receipt and payment-session fields. Payment is requested only for the separate photo check-in flow. Each fresh farmer sign-in requires a new manual payment before its first photo check-in; approval from an earlier sign-in does not carry over.
+Expert consultation rates are profile information only and are not charged through this payment flow.
 
 ## Features
 
 - Account registration and sign-in with role-aware dashboards and server-enforced authorization
 - Farmer farm registration, private crop-field passports, English/Kiswahili language preference, and account-owned farm input/application records
 - Private crop-problem cases with unique references, optional photos, dated action/observation timelines, farmer-recorded outcomes, follow-up dates, and explicit farmer-controlled closure
+- Crop and livestock reports can include a private voice recording in English or Kiswahili; recordings are saved with the report and are not transcribed or sent to AI
 - Product-use and batch traceability notes; complaints remain explicitly pending review and do not assert a product is unsafe, fake, or defective
 - Farmer crop/livestock photo check-ins, private/local or Cloudinary-backed media, expert-review-first demo response, and scan history
 - Local agrovet catalog, region filters, vendor product management, multi-vendor-safe basket, transactional stock decrement and checkout
 - Farmer-to-expert consultation requests, appointment lists, cancellation/completion, and protected vendor order status updates
+- Expert registration with license and Certificate of Good Conduct uploads, expertise, experience, availability, service radius and consultation rate; administrators manually review documents before new profiles can be listed
+- Offline app-shell and public farming-guide caching; private account data and report submissions are not cached or queued for offline synchronization
 - On-demand KSh 10 M-Pesa Send Money payment before photo check-ins, with receipt submission and administrator verification; crop-case AI advice remains free
 - Expiring, single-use password recovery links delivered through configured SMTP
 - Searchable English/Kiswahili farming guides with category filters and administrator editing/publication controls
@@ -88,7 +92,7 @@ Run `npm run db:migrate` after deployment to create the soil-test, calendar-task
 
 ### Password recovery, guides, administration and Fun Zone
 
-The public **Knowledge library** searches published bilingual crop, pest, disease, soil, livestock, and prevention guides. Run `npm run db:migrate` after deploying to create the guide and password-reset tables and seed the initial guides. Administrators can search accounts, change non-admin roles or access status, update crop-report statuses, and create, edit, publish, or unpublish guides from the admin navigation. Account and crop-report data is backed by PostgreSQL; Fun Zone scores are stored only in that browser's local storage and are not synchronized between devices or accounts.
+The public **Knowledge library** searches published bilingual crop, pest, disease, soil, livestock, and prevention guides. Run `npm run db:migrate` after deploying to create the guide and password-reset tables and seed the initial guides. Administrators can search accounts, change non-admin roles or access status, review submitted expert credentials, update crop-report statuses, and create, edit, publish, or unpublish guides from the admin navigation. Account and crop-report data is backed by PostgreSQL; Fun Zone scores are stored only in that browser's local storage and are not synchronized between devices or accounts.
 
 Password recovery requires an SMTP service. Set these values in the API environment (the root `.env` is used for local development):
 
@@ -145,9 +149,11 @@ The crop recovery case reporter is deliberately separate from this diagnostic en
 ### Service boundaries
 
 - Exact farm coordinates are not collected. Farm records contain a county and optional general location description only.
-- Verified community outbreak alerts, offline report synchronization, expert credential verification, and product-complaint investigation are not connected services in this release. The app does not fabricate outbreaks, expert responses, or review outcomes.
-- A recorded expert request is not confirmation that an expert has been assigned or notified. Demo expert seed accounts are fixtures, not credential verification.
-- The language preference is saved to the farmer profile; the entire application has not yet been translated into Kiswahili.
+- Crop and livestock cases record county/region-level locations for localized support, but automated outbreak detection, geo-tracking, and outbreak alerts are not connected. The app does not fabricate outbreaks.
+- New expert documents require manual administrator review; this workflow does not independently query licensing bodies or police records. Seed experts are development fixtures and are not evidence of real-world credentials.
+- A recorded expert request is not confirmation that an expert has been assigned or notified. Consultation rates are displayed but professional billing is not integrated.
+- The service worker caches the app shell and public guide responses only. It does not cache account data or queue/synchronize reports while offline.
+- The language preference is saved to the farmer profile and key farmer and guide experiences are bilingual; the entire application has not yet been translated into Kiswahili.
 
 ### Media storage
 
@@ -171,10 +177,11 @@ Production builds are written to `apps/api/dist` and `apps/web/dist`. Serve the 
 
 ## Data and operational notes
 
-- PostgreSQL migrations create the users, farms, crop passports, recovery cases/events, farm-input records, diagnoses, products, consultations, orders, and order-items tables with checks, foreign keys, and indexes.
+- PostgreSQL migrations create the users, farms, crop passports, recovery cases/events (including private voice attachments), expert profiles and review status, farm-input records, diagnoses, products, consultations, orders, and order-items tables with checks, foreign keys, and indexes.
 - Checkout derives price and vendor ownership from PostgreSQL, locks product rows, snapshots prices, checks and decrements stock inside a transaction, and rejects cross-vendor orders.
 - Expert bookings are protected against duplicate pending bookings for the same expert/time by a PostgreSQL partial unique index.
 - Access tokens are held in tab-scoped `sessionStorage`; keep their configured lifetime short. A production refresh-session feature should use rotating, hashed, HTTP-only secure cookies with CSRF protection.
 - Local crop and diagnosis photos are served only through short-lived, owner-bound media links; keep API signing secrets private and configure private Cloudinary retention before production.
+- Expert license and good-conduct files are stored as private media and require short-lived owner-bound links. Configure production media storage and retention before accepting real identity documents.
 - Set a production reverse proxy/CDN policy for media. Local media storage is not suitable for horizontally scaled production API instances.
-- Before public launch, add payment provider/webhook support, shipping/delivery address policy, expert availability slots/credentials, account deactivation and retention, audit logging, backup/restore tests, and accessibility/security reviews.
+- Before public launch, add consultation payment/provider webhooks, shipping/delivery address policy, confirmed expert availability slots and dispatch, account deactivation and retention, audit logging, backup/restore tests, and accessibility/security reviews.
