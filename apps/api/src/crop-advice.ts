@@ -311,7 +311,15 @@ async function adviseWithGemini(problem: CropProblem): Promise<CropAdvice> {
       },
     );
     if (!response.ok) {
-      throw new Error(`Gemini returned HTTP ${response.status}.`);
+      const errorPayload: unknown = await response.json().catch(() => null);
+      const providerError = typeof errorPayload === "object" && errorPayload !== null && "error" in errorPayload
+        ? errorPayload.error
+        : null;
+      const message = typeof providerError === "object" && providerError !== null && "message" in providerError
+        && typeof providerError.message === "string"
+        ? providerError.message
+        : "";
+      throw new Error(`Gemini returned HTTP ${response.status}${message ? `: ${message}` : "."}`);
     }
     return parseGeminiAdvice(await response.json());
   } finally {
