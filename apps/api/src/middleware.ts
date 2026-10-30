@@ -105,7 +105,11 @@ export function errorHandler(
     requestId: req.header("x-request-id"),
     method: req.method,
     path: req.path,
-    message: error instanceof Error ? error.message : "Unknown error",
+    message: error instanceof Error
+      ? error.message
+      : typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+        ? error.message
+        : "Unknown error",
     stack: env.NODE_ENV === "production" ? undefined : error instanceof Error ? error.stack : undefined,
   }));
   res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Something went wrong. Please try again." } });

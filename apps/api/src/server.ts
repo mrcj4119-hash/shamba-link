@@ -33,6 +33,7 @@ import { farmerPlanningRouter } from "./farmer-planning.js";
 import type { UserRole } from "./user-role.js";
 
 const app = express();
+app.set("trust proxy", 1);
 const uploadDirectory = path.resolve(process.cwd(), env.UPLOAD_DIR);
 await mkdir(uploadDirectory, { recursive: true });
 
