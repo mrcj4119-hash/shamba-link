@@ -20,7 +20,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().trim().min(1).default("gpt-4.1-mini"),
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_MODEL: z.string().trim().min(1).default("gemini-3.8-flash"),
+  GEMINI_MODEL: z.string().trim().min(1).default("gemini-3.5-flash-lite"),
   OLLAMA_BASE_URL: z.string().url().default("http://localhost:11434"),
   OLLAMA_MODEL: z.string().trim().min(1).default("qwen2.5vl:3b"),
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
