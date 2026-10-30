@@ -251,80 +251,103 @@ async function adviseWithOllama(problem: CropProblem): Promise<CropAdvice> {
 
 async function adviseWithGemini(problem: CropProblem): Promise<CropAdvice> {
   if (!env.GEMINI_API_KEY) throw new Error("Gemini API key is not configured.");
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25_000);
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_MODEL)}:generateContent`,
-      {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": env.GEMINI_API_KEY,
+  const requestBody = JSON.stringify({
+    systemInstruction: { parts: [{ text: adviceInstructions(problem.caseType) }] },
+    contents: [{
+      role: "user",
+      parts: [
+        {
+          text: JSON.stringify({
+            caseType: problem.caseType,
+            subjectName: problem.subjectName,
+            symptoms: problem.symptoms,
+            contextNotes: problem.contextNotes,
+            spreadRate: problem.spreadRate,
+            affectedPortion: problem.affectedPortion,
+          }),
         },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: adviceInstructions(problem.caseType) }] },
-          contents: [{
-            role: "user",
-            parts: [
-              {
-                text: JSON.stringify({
-                  caseType: problem.caseType,
-                  subjectName: problem.subjectName,
-                  symptoms: problem.symptoms,
-                  contextNotes: problem.contextNotes,
-                  spreadRate: problem.spreadRate,
-                  affectedPortion: problem.affectedPortion,
-                }),
-              },
-              ...(problem.image ? [{
-                inlineData: {
-                  mimeType: problem.image.mimeType,
-                  data: problem.image.buffer.toString("base64"),
-                },
-              }] : []),
-            ],
-          }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            maxOutputTokens: 512,
-            responseSchema: {
-              type: "OBJECT",
-              properties: {
-                likelyIssue: { type: "STRING" },
-                confidenceScore: { type: "NUMBER" },
-                urgency: { type: "STRING", enum: ["routine", "prompt", "urgent"] },
-                immediateActions: { type: "ARRAY", items: { type: "STRING" }, maxItems: 3 },
-                avoidActions: { type: "ARRAY", items: { type: "STRING" }, maxItems: 2 },
-                questionsForAgrovet: { type: "ARRAY", items: { type: "STRING" }, maxItems: 2 },
-                recommendedProductTypes: { type: "ARRAY", items: { type: "STRING" }, maxItems: 2 },
-                requiresExpertReview: { type: "BOOLEAN" },
-              },
-              required: [
-                "likelyIssue", "confidenceScore", "urgency", "immediateActions",
-                "avoidActions", "questionsForAgrovet", "recommendedProductTypes", "requiresExpertReview",
-              ],
-            },
+        ...(problem.image ? [{
+          inlineData: {
+            mimeType: problem.image.mimeType,
+            data: problem.image.buffer.toString("base64"),
           },
-        }),
+        }] : []),
+      ],
+    }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      maxOutputTokens: 512,
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          likelyIssue: { type: "STRING" },
+          confidenceScore: { type: "NUMBER" },
+          urgency: { type: "STRING", enum: ["routine", "prompt", "urgent"] },
+          immediateActions: { type: "ARRAY", items: { type: "STRING" }, maxItems: 3 },
+          avoidActions: { type: "ARRAY", items: { type: "STRING" }, maxItems: 2 },
+          questionsForAgrovet: { type: "ARRAY", items: { type: "STRING" }, maxItems: 2 },
+          recommendedProductTypes: { type: "ARRAY", items: { type: "STRING" }, maxItems: 2 },
+          requiresExpertReview: { type: "BOOLEAN" },
+        },
+        required: [
+          "likelyIssue", "confidenceScore", "urgency", "immediateActions",
+          "avoidActions", "questionsForAgrovet", "recommendedProductTypes", "requiresExpertReview",
+        ],
       },
-    );
-    if (!response.ok) {
-      const errorPayload: unknown = await response.json().catch(() => null);
-      const providerError = typeof errorPayload === "object" && errorPayload !== null && "error" in errorPayload
-        ? errorPayload.error
-        : null;
-      const message = typeof providerError === "object" && providerError !== null && "message" in providerError
-        && typeof providerError.message === "string"
-        ? providerError.message
-        : "";
-      throw new Error(`Gemini returned HTTP ${response.status}${message ? `: ${message}` : "."}`);
+    },
+  });
+  const fallbackModel = "gemini-3.6-flash";
+  const sendRequest = async (model: string): Promise<Response> => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+    try {
+      return await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "content-type": "application/json",
+            "x-goog-api-key": env.GEMINI_API_KEY!,
+          },
+          body: requestBody,
+        },
+      );
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(`Gemini request timed out for ${model}.`);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    return parseGeminiAdvice(await response.json());
-  } finally {
-    clearTimeout(timeout);
+  };
+
+  let response: Response;
+  let usedFallback = env.GEMINI_MODEL === fallbackModel;
+  try {
+    response = await sendRequest(env.GEMINI_MODEL);
+  } catch (error) {
+    if (env.GEMINI_MODEL === fallbackModel || !(error instanceof Error) || !error.message.startsWith("Gemini request timed out")) {
+      throw error;
+    }
+    usedFallback = true;
+    response = await sendRequest(fallbackModel);
   }
+  if ([404, 503].includes(response.status) && !usedFallback) {
+    usedFallback = true;
+    response = await sendRequest(fallbackModel);
+  }
+  if (!response.ok) {
+    const errorPayload: unknown = await response.json().catch(() => null);
+    const providerError = typeof errorPayload === "object" && errorPayload !== null && "error" in errorPayload
+      ? errorPayload.error
+      : null;
+    const message = typeof providerError === "object" && providerError !== null && "message" in providerError
+      && typeof providerError.message === "string"
+      ? providerError.message
+      : "";
+    throw new Error(`Gemini returned HTTP ${response.status}${message ? `: ${message}` : "."}`);
+  }
+  return parseGeminiAdvice(await response.json());
 }
 
 export function adviseFarmProblem(problem: CropProblem): Promise<CropAdvice> {
