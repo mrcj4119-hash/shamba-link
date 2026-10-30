@@ -642,12 +642,35 @@ app.post("/api/cases", authenticate, requireRole("farmer"), caseReportUpload.fie
   }
   let media: Awaited<ReturnType<typeof saveDiagnosisImage>> | undefined;
   let videoMedia: Awaited<ReturnType<typeof saveDiagnosisVideo>> | undefined;
+  const mediaStorageFailures: string[] = [];
   try {
     if (image && imageType) {
-      media = await saveDiagnosisImage(image.buffer, imageType === "image/jpeg" ? "jpg" : imageType === "image/png" ? "png" : "webp");
+      try {
+        media = await saveDiagnosisImage(image.buffer, imageType === "image/jpeg" ? "jpg" : imageType === "image/png" ? "png" : "webp");
+      } catch (error) {
+        mediaStorageFailures.push("photo");
+        console.error(JSON.stringify({
+          level: "error",
+          method: req.method,
+          path: req.path,
+          message: "Initial crop report photo could not be stored.",
+          cause: error instanceof Error ? error.message : "Unknown media storage error",
+        }));
+      }
     }
     if (video && videoType) {
-      videoMedia = await saveDiagnosisVideo(video.buffer, videoType === "video/mp4" ? "mp4" : "webm");
+      try {
+        videoMedia = await saveDiagnosisVideo(video.buffer, videoType === "video/mp4" ? "mp4" : "webm");
+      } catch (error) {
+        mediaStorageFailures.push("video");
+        console.error(JSON.stringify({
+          level: "error",
+          method: req.method,
+          path: req.path,
+          message: "Initial crop report video could not be stored.",
+          cause: error instanceof Error ? error.message : "Unknown media storage error",
+        }));
+      }
     }
     let aiAssessment: CropAdvice | null = null;
     let aiAssessmentStatus: "available" | "unavailable" | "not_configured" | "not_requested" = "not_requested";
@@ -663,7 +686,7 @@ app.post("/api/cases", authenticate, requireRole("farmer"), caseReportUpload.fie
           contextNotes: input.contextNotes,
           spreadRate: input.spreadRate,
           affectedPortion: input.affectedPortion,
-          ...(image && imageType && media ? {
+          ...(image && imageType ? {
             image: {
               buffer: image.buffer,
               mimeType: imageType,
@@ -694,9 +717,11 @@ app.post("/api/cases", authenticate, requireRole("farmer"), caseReportUpload.fie
       }).returning("*");
       await trx("crop_case_events").insert({
         case_id: row.id, farmer_id: req.auth!.userId, event_type: "reported",
-        notes: aiAssessment
+        notes: `${aiAssessment
           ? `${input.caseType === "livestock" ? "Animal" : "Crop"} problem reported. Unverified AI decision-support guidance is available.`
-          : `${input.caseType === "livestock" ? "Animal" : "Crop"} problem reported. No AI assessment was available when the report was submitted.`,
+          : `${input.caseType === "livestock" ? "Animal" : "Crop"} problem reported. No AI assessment was available when the report was submitted.`}${mediaStorageFailures.length
+          ? ` Optional ${mediaStorageFailures.join(" and ")} could not be stored; the report was saved without it.`
+          : ""}`,
       });
       if (media) await trx("crop_case_events").insert({
         case_id: row.id, farmer_id: req.auth!.userId, event_type: "photo",
